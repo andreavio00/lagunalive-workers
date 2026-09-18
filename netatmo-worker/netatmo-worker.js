@@ -1,6 +1,7 @@
 /**
  * Proxy Netatmo pubblico per LagunaLive.
  *
+ * GET /netatmo/index
  * GET /netatmo/all
  * GET /netatmo/all?module=rain
  * GET /netatmo/all?module=wind
@@ -67,6 +68,7 @@ export default {
         return jsonResponse({
           endpoints: [
             '/netatmo/status',
+            '/netatmo/index',
             '/netatmo/all',
             '/netatmo/all?module=rain',
             '/netatmo/all?module=wind',
@@ -153,6 +155,36 @@ if (url.pathname === '/netatmo/station') {
 
   return jsonResponse(station);
 }
+      if (url.pathname === '/netatmo/index') {
+        const stations = snapshot.stations.map(
+          (station) => ({
+            id: station.id,
+            source: station.source,
+            name: station.name,
+            city: station.city,
+            location: station.location,
+            lat: station.lat,
+            lon: station.lon,
+            altitude: station.altitude,
+            updatedAt: station.updatedAt,
+            updatedAtIso: station.updatedAtIso,
+            ageMinutes: station.ageMinutes,
+            stale: station.stale,
+            hasTemperature: station.temp !== null,
+            hasHumidity: station.humidity !== null,
+            hasPressure: station.pressure !== null,
+            hasRain: station.hasRain,
+            hasWind: station.hasWind,
+            mapUrl: station.mapUrl
+          })
+        );
+
+        return jsonResponse(stations, 200, {
+          'X-Netatmo-Cache': snapshot.cacheStatus,
+          'X-Netatmo-Count': String(stations.length)
+        });
+      }
+
       if (url.pathname === '/netatmo/all') {
         let stations = [...snapshot.stations];
 
@@ -233,7 +265,7 @@ if (url.pathname === '/netatmo/station') {
       return jsonResponse(
         {
           error:
-            'Usa /netatmo/all, /netatmo/status oppure /netatmo/<stationId>'
+            'Usa /netatmo/index, /netatmo/all, /netatmo/status oppure /netatmo/<stationId>'
         },
         404
       );
