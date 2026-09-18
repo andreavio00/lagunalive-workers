@@ -2,6 +2,7 @@
  * Proxy Weathercloud per LagunaLive.
  *
  * GET /weathercloud/all           -> array di tutte le stazioni configurate
+ * GET /weathercloud/selected      -> stazioni scelte per la rete amatoriale
  * GET /weathercloud/{deviceId}     -> singola stazione
  *
  * Per ciascuna stazione unisce due fonti:
@@ -33,12 +34,94 @@ const STATION_IDS = [
   '9454656179'
 ];
 
+// Rete amatoriale approvata per LagunaLive.
+// networkOrder consente di unire questa risposta a Netatmo
+// mantenendo l'ordine deciso nella tabella di selezione.
+const SELECTED_STATIONS = [
+  {
+    id: '2414314087',
+    displayName: 'Cannaregio – Stazione meteo',
+    sector: 'Cannaregio',
+    networkRole: 'principale',
+    networkOrder: 1,
+    optional: false
+  },
+  {
+    id: '2591958863',
+    displayName: 'Murano – TcMurano',
+    sector: 'Murano centro',
+    networkRole: 'principale',
+    networkOrder: 3,
+    optional: false
+  },
+  {
+    id: '2361312782',
+    displayName: 'Murano – MeteoLazza',
+    sector: 'Murano est',
+    networkRole: 'supporto',
+    networkOrder: 4,
+    optional: false
+  },
+  {
+    id: '9454656179',
+    displayName: 'Malamocco',
+    sector: 'Lido sud',
+    networkRole: 'principale',
+    networkOrder: 9,
+    optional: false
+  },
+  {
+    id: '8414577935',
+    displayName: 'Lido centro',
+    sector: 'Lido centro',
+    networkRole: 'supporto',
+    networkOrder: 10,
+    optional: false
+  },
+  {
+    id: '8732543148',
+    displayName: 'Giudecca – gnecca',
+    sector: 'Giudecca',
+    networkRole: 'sperimentale',
+    networkOrder: 14,
+    optional: false
+  }
+];
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders() });
+    }
+
+    if (url.pathname === '/' || url.pathname === '/weathercloud') {
+      return jsonResponse({
+        endpoints: [
+          '/weathercloud/all',
+          '/weathercloud/selected',
+          '/weathercloud/selected?fresh=1',
+          '/weathercloud/<deviceId>'
+        ]
+      });
+    }
+
+    if (url.pathname === '/weathercloud/selected') {
+      let results = await Promise.all(
+        SELECTED_STATIONS.map(async (selection) => {
+          const station = await fetchStation(selection.id);
+          return addSelectionMetadata(station, selection);
+        })
+      );
+
+      if (url.searchParams.get('fresh') === '1') {
+        results = results.filter(
+          (station) => !station.stale && !station.error
+        );
+      }
+
+      return jsonResponse(results);
     }
 
     if (url.pathname === '/weathercloud/all') {
@@ -53,7 +136,7 @@ export default {
     }
 
     return jsonResponse(
-      { error: 'Usa /weathercloud/all oppure /weathercloud/<deviceId>' },
+      { error: 'Usa /weathercloud/all, /weathercloud/selected oppure /weathercloud/<deviceId>' },
       404
     );
   }
@@ -75,6 +158,17 @@ async function fetchStation(id) {
     };
   }
 
+  const fetchedAt = new Date().toISOString();
+  const updatedAt = values.epoch ? values.epoch * 1000 : null;
+  const ageMinutes = updatedAt
+    ? Math.max(0, Math.round((Date.now() - updatedAt) / 60000))
+    : null;
+  const hasRain = values.rain != null || values.rainrate != null;
+  const hasWind =
+    values.wspdavg != null ||
+    values.wspd != null ||
+    values.wspdhi != null;
+
   return {
     id,
     source: 'weathercloud',
@@ -84,7 +178,11 @@ async function fetchStation(id) {
     lat: meta.lat ?? null,
     lon: meta.lon ?? null,
     altitude: meta.altitude ?? null,
-    updatedAt: values.epoch ? values.epoch * 1000 : null,
+    fetchedAt,
+    updatedAt,
+    updatedAtIso: updatedAt ? new Date(updatedAt).toISOString() : null,
+    ageMinutes,
+    stale: ageMinutes === null || ageMinutes > 30,
     temp: values.temp ?? null,
     humidity: values.hum ?? null,
     dewPoint: values.dew ?? null,
@@ -99,8 +197,28 @@ async function fetchStation(id) {
     windDirInstant: values.wdir ?? null,
     rainRate: values.rainrate ?? null,
     rain: values.rain ?? null,
+    rainLive: values.rainrate ?? null,
+    rain60min: null,
+    rain24h: values.rain ?? null,
     solarRad: values.solarrad ?? null,
-    uvIndex: values.uvi ?? null
+    uvIndex: values.uvi ?? null,
+    hasTemperature: values.temp != null,
+    hasHumidity: values.hum != null,
+    hasPressure: values.bar != null,
+    hasRain,
+    hasWind,
+    mapUrl: `https://app.weathercloud.net/d${id}`
+  };
+}
+
+function addSelectionMetadata(station, selection) {
+  return {
+    ...station,
+    displayName: selection.displayName,
+    sector: selection.sector,
+    networkRole: selection.networkRole,
+    networkOrder: selection.networkOrder,
+    optional: selection.optional
   };
 }
 
@@ -149,7 +267,7 @@ async function fetchStationValues(id) {
   return JSON.parse(text);
 }
 
-async function fetchWithTimeout(url, options = {}, ms = 8000) {
+async function fetchWithTimeout(url, options = {}, ms = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
