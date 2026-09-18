@@ -4,6 +4,8 @@
  * GET /weathercloud/all           -> array di tutte le stazioni configurate
  * GET /weathercloud/selected      -> stazioni scelte per la rete amatoriale
  * GET /weathercloud/{deviceId}     -> singola stazione
+ * GET /wunderground/selected        -> stazioni Weather Underground selezionate
+ * GET /wunderground/{stationId}     -> singola stazione Weather Underground
  *
  * Per ciascuna stazione unisce due fonti:
  *  - https://app.weathercloud.net/d{id}                 (pagina, per nome/città/posizione/coordinate)
@@ -18,6 +20,18 @@
 const ALLOWED_ORIGIN = '*'; // in produzione: il dominio GitHub Pages
 
 const UA = 'Mozilla/5.0 (compatible; LagunaLive/1.0; +https://andreavio00.github.io/LagunaLive/)';
+
+const WUNDERGROUND_API_KEY = 'f6d2efe5720d47ea92efe5720df7eaa8';
+const WUNDERGROUND_SELECTED_STATIONS = [
+  {
+    id: 'IVENIC160',
+    displayName: 'Cannaregio – Palestra Marsico',
+    sector: 'Sant’Alvise / ex Umberto I',
+    networkRole: 'principale',
+    networkOrder: 0.5,
+    optional: false
+  }
+];
 
 // Gli ID che ci hai mandato dalle pagine /map#...
 const STATION_IDS = [
@@ -102,9 +116,56 @@ export default {
           '/weathercloud/all',
           '/weathercloud/selected',
           '/weathercloud/selected?fresh=1',
-          '/weathercloud/<deviceId>'
+          '/weathercloud/<deviceId>',
+          '/wunderground/selected',
+          '/wunderground/<stationId>'
         ]
       });
+    }
+
+    if (url.pathname === '/wunderground/selected') {
+      const results = await Promise.all(
+        WUNDERGROUND_SELECTED_STATIONS.map(async (selection) => {
+          try {
+            const station = await fetchWundergroundStation(selection.id);
+            return addSelectionMetadata(station, selection);
+          } catch (err) {
+            return addSelectionMetadata(
+              {
+                id: selection.id,
+                source: 'wunderground',
+                name: selection.displayName,
+                error: err.message || 'Nessun dato live disponibile'
+              },
+              selection
+            );
+          }
+        })
+      );
+
+      return jsonResponse(results);
+    }
+
+    const wundergroundMatch = url.pathname.match(
+      /^\/wunderground\/([A-Z0-9]+)$/i
+    );
+    if (wundergroundMatch) {
+      try {
+        return jsonResponse(
+          await fetchWundergroundStation(
+            wundergroundMatch[1].toUpperCase()
+          )
+        );
+      } catch (err) {
+        return jsonResponse(
+          {
+            id: wundergroundMatch[1].toUpperCase(),
+            source: 'wunderground',
+            error: err.message || 'Nessun dato live disponibile'
+          },
+          502
+        );
+      }
     }
 
     if (url.pathname === '/weathercloud/selected') {
@@ -136,11 +197,103 @@ export default {
     }
 
     return jsonResponse(
-      { error: 'Usa /weathercloud/all, /weathercloud/selected oppure /weathercloud/<deviceId>' },
+      { error: 'Usa /weathercloud/all, /weathercloud/selected, /wunderground/selected oppure uno degli endpoint per singola stazione' },
       404
     );
   }
 };
+
+async function fetchWundergroundStation(id) {
+  const params = new URLSearchParams({
+    stationId: id,
+    format: 'json',
+    units: 'm',
+    numericPrecision: 'decimal',
+    apiKey: WUNDERGROUND_API_KEY
+  });
+
+  const res = await fetchWithTimeout(
+    `https://api.weather.com/v2/pws/observations/current?${params}`,
+    {
+      headers: {
+        'User-Agent': UA,
+        'Accept': 'application/json'
+      }
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Weather Underground HTTP ${res.status}`);
+  }
+
+  const payload = await res.json();
+  const observation = payload?.observations?.[0];
+
+  if (!observation) {
+    throw new Error('Nessuna osservazione Weather Underground');
+  }
+
+  const metric = observation.metric || {};
+  const updatedAt = observation.epoch
+    ? Number(observation.epoch) * 1000
+    : null;
+  const ageMinutes = updatedAt
+    ? Math.max(0, Math.round((Date.now() - updatedAt) / 60000))
+    : null;
+
+  return {
+    id,
+    source: 'wunderground',
+    name: 'Palestra Marsico',
+    city: 'Venezia',
+    location: 'Sant’Alvise, Cannaregio',
+    lat: numericOrNull(observation.lat),
+    lon: numericOrNull(observation.lon),
+    altitude: numericOrNull(metric.elev),
+    fetchedAt: new Date().toISOString(),
+    updatedAt,
+    updatedAtIso: updatedAt ? new Date(updatedAt).toISOString() : null,
+    ageMinutes,
+    stale: ageMinutes === null || ageMinutes > 30,
+    temp: numericOrNull(metric.temp),
+    humidity: numericOrNull(observation.humidity),
+    dewPoint: numericOrNull(metric.dewpt),
+    windChill: numericOrNull(metric.windChill),
+    heatIndex: numericOrNull(metric.heatIndex),
+    thw: null,
+    pressure: numericOrNull(metric.pressure),
+    windSpeed: numericOrNull(metric.windSpeed),
+    windSpeedInstant: numericOrNull(metric.windSpeed),
+    windGust: numericOrNull(metric.windGust),
+    windDir: numericOrNull(observation.winddir),
+    windDirInstant: numericOrNull(observation.winddir),
+    rainRate: numericOrNull(metric.precipRate),
+    rain: numericOrNull(metric.precipTotal),
+    rainLive: numericOrNull(metric.precipRate),
+    rain60min: null,
+    rain24h: numericOrNull(metric.precipTotal),
+    solarRad: numericOrNull(observation.solarRadiation),
+    uvIndex: numericOrNull(observation.uv),
+    hasTemperature: metric.temp != null,
+    hasHumidity: observation.humidity != null,
+    hasPressure: metric.pressure != null,
+    hasRain:
+      metric.precipRate != null ||
+      metric.precipTotal != null,
+    hasWind:
+      metric.windSpeed != null ||
+      metric.windGust != null,
+    mapUrl: `https://www.wunderground.com/dashboard/pws/${encodeURIComponent(id)}`
+  };
+}
+
+function numericOrNull(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
 
 async function fetchStation(id) {
   const [meta, values] = await Promise.all([
@@ -294,3 +447,4 @@ function jsonResponse(obj, status = 200) {
     }
   });
 }
+
