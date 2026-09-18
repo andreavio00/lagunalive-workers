@@ -3,6 +3,8 @@
  *
  * GET /netatmo/index
  * GET /netatmo/all
+ * GET /netatmo/selected
+ * GET /netatmo/selected?includeOptional=1
  * GET /netatmo/all?module=rain
  * GET /netatmo/all?module=wind
  * GET /netatmo/all?fresh=1
@@ -38,8 +40,87 @@ const KNOWN_NAMES = {
   '70:ee:50:af:3d:96': 'Campo Santa Margherita',
   '70:ee:50:b0:a2:1c': 'Malamocco',
   '70:ee:50:b4:e8:0a': 'Pellestrina',
-  '70:ee:50:af:5a:52': 'Laguna nord – Torcello'
+  '70:ee:50:af:5a:52': 'Laguna nord – Torcello',
+  '70:ee:50:2a:dd:e8': 'Burano'
 };
+
+// Rete amatoriale approvata per LagunaLive.
+// networkOrder consente di unire questa risposta a Weathercloud
+// mantenendo l'ordine deciso nella tabella di selezione.
+const SELECTED_STATIONS = [
+  {
+    id: '70:ee:50:3e:ee:22',
+    displayName: 'Cannaregio – Santa Caterina',
+    sector: 'Cannaregio',
+    networkRole: 'supporto',
+    networkOrder: 2,
+    optional: false
+  },
+  {
+    id: '70:ee:50:af:81:0c',
+    displayName: 'Murano – Serenella',
+    sector: 'Murano sud-ovest',
+    networkRole: 'supporto',
+    networkOrder: 5,
+    optional: false
+  },
+  {
+    id: '70:ee:50:af:5a:52',
+    displayName: 'Torcello',
+    sector: 'Laguna nord',
+    networkRole: 'principale',
+    networkOrder: 6,
+    optional: false
+  },
+  {
+    id: '70:ee:50:2a:dd:e8',
+    displayName: 'Burano',
+    sector: 'Laguna nord',
+    networkRole: 'supporto',
+    networkOrder: 7,
+    optional: false
+  },
+  {
+    id: '70:ee:50:b4:e8:0a',
+    displayName: 'Pellestrina',
+    sector: 'Pellestrina',
+    networkRole: 'sperimentale',
+    networkOrder: 8,
+    optional: false
+  },
+  {
+    id: '70:ee:50:af:3d:96',
+    displayName: 'Campo Santa Margherita',
+    sector: 'Dorsoduro / ovest',
+    networkRole: 'principale',
+    networkOrder: 11,
+    optional: false
+  },
+  {
+    id: '70:ee:50:bf:7e:5a',
+    displayName: 'Calle dei Fabbri',
+    sector: 'San Marco / centro',
+    networkRole: 'principale',
+    networkOrder: 12,
+    optional: false
+  },
+  {
+    id: '70:ee:50:2b:02:64',
+    displayName: 'Sotoportego De Le Pute',
+    sector: 'Castello / est',
+    networkRole: 'principale',
+    networkOrder: 13,
+    optional: false
+  },
+  {
+    id: '70:ee:50:b5:49:38',
+    displayName: 'Sentinella terraferma – Via dei Rododendri',
+    sector: 'Terraferma / arrivo O-NO',
+    networkRole: 'sentinella',
+    networkOrder: 15,
+    optional: true
+  }
+];
 
 export default {
   async fetch(request, env, ctx) {
@@ -70,6 +151,8 @@ export default {
             '/netatmo/status',
             '/netatmo/index',
             '/netatmo/all',
+            '/netatmo/selected',
+            '/netatmo/selected?includeOptional=1',
             '/netatmo/all?module=rain',
             '/netatmo/all?module=wind',
             '/netatmo/all?fresh=1',
@@ -100,6 +183,52 @@ export default {
           ).length,
           possibleTruncation:
             snapshot.upstreamCount >= STATION_LIMIT
+        });
+      }
+
+      if (url.pathname === '/netatmo/selected') {
+        const includeOptional = ['1', 'true', 'yes'].includes(
+          (url.searchParams.get('includeOptional') || '').toLowerCase()
+        );
+
+        const stationsById = new Map(
+          snapshot.stations.map((station) => [
+            station.id.toLowerCase(),
+            station
+          ])
+        );
+
+        let stations = SELECTED_STATIONS
+          .filter((selection) => includeOptional || !selection.optional)
+          .map((selection) => {
+            const station = stationsById.get(selection.id.toLowerCase());
+
+            if (!station) {
+              return missingSelectedStation(selection);
+            }
+
+            return {
+              ...station,
+              displayName: selection.displayName,
+              sector: selection.sector,
+              networkRole: selection.networkRole,
+              networkOrder: selection.networkOrder,
+              optional: selection.optional,
+              hasTemperature: station.temp !== null,
+              hasHumidity: station.humidity !== null,
+              hasPressure: station.pressure !== null
+            };
+          });
+
+        if (url.searchParams.get('fresh') === '1') {
+          stations = stations.filter(
+            (station) => !station.stale && !station.error
+          );
+        }
+
+        return jsonResponse(stations, 200, {
+          'X-Netatmo-Cache': snapshot.cacheStatus,
+          'X-Netatmo-Count': String(stations.length)
         });
       }
 	// Rotte brevi e più comode da usare
@@ -265,7 +394,7 @@ if (url.pathname === '/netatmo/station') {
       return jsonResponse(
         {
           error:
-            'Usa /netatmo/index, /netatmo/all, /netatmo/status oppure /netatmo/<stationId>'
+            'Usa /netatmo/index, /netatmo/all, /netatmo/selected, /netatmo/status oppure /netatmo/<stationId>'
         },
         404
       );
@@ -280,6 +409,26 @@ if (url.pathname === '/netatmo/station') {
     }
   }
 };
+
+function missingSelectedStation(selection) {
+  return {
+    id: selection.id,
+    source: 'netatmo',
+    name: selection.displayName,
+    displayName: selection.displayName,
+    sector: selection.sector,
+    networkRole: selection.networkRole,
+    networkOrder: selection.networkOrder,
+    optional: selection.optional,
+    stale: true,
+    hasTemperature: false,
+    hasHumidity: false,
+    hasPressure: false,
+    hasRain: false,
+    hasWind: false,
+    error: 'Stazione selezionata non presente nella risposta Netatmo corrente'
+  };
+}
 
 async function getSnapshot(request, ctx) {
   const cache = caches.default;
