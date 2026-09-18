@@ -121,6 +121,14 @@ const SELECTED_STATIONS = [
     optional: false
   },
   {
+    id: '70:ee:50:c3:8f:28',
+    displayName: 'Santa Croce – Ruga Bela',
+    sector: 'Santa Croce',
+    networkRole: 'supporto',
+    networkOrder: 13.5,
+    optional: false
+  },
+  {
     id: '70:ee:50:b5:49:38',
     displayName: 'Sentinella terraferma – Via dei Rododendri',
     sector: 'Terraferma / arrivo O-NO',
@@ -903,3 +911,4 @@ function jsonResponse(
     }
   );
 }
+
