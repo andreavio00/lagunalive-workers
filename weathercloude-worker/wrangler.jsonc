@@ -1,1 +1,5 @@
-
+{
+  "name": "weathercloude-worker",
+  "main": "weathercloude-worker.js",
+  "compatibility_date": "2026-09-12"
+}
