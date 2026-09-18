@@ -57,6 +57,14 @@ const SELECTED_STATIONS = [
     optional: false
   },
   {
+    id: '70:ee:50:a4:41:c6',
+    displayName: 'Cannaregio – Calle de le Vele',
+    sector: 'Cannaregio',
+    networkRole: 'supporto',
+    networkOrder: 2.5,
+    optional: false
+  },
+  {
     id: '70:ee:50:af:81:0c',
     displayName: 'Murano – Serenella',
     sector: 'Murano sud-ovest',
