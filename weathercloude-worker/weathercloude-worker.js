@@ -92,14 +92,6 @@ const SELECTED_STATIONS = [
     networkOrder: 10,
     optional: false
   },
-  {
-    id: '8732543148',
-    displayName: 'Giudecca – gnecca',
-    sector: 'Giudecca',
-    networkRole: 'sperimentale',
-    networkOrder: 14,
-    optional: false
-  }
 ];
 
 export default {
@@ -447,4 +439,3 @@ function jsonResponse(obj, status = 200) {
     }
   });
 }
-
