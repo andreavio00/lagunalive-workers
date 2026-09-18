@@ -100,7 +100,59 @@ export default {
             snapshot.upstreamCount >= STATION_LIMIT
         });
       }
+	// Rotte brevi e più comode da usare
+if (url.pathname === '/netatmo/rain') {
+  const stations = snapshot.stations.filter(
+    (station) => station.hasRain
+  );
 
+  return jsonResponse(stations, 200, {
+    'X-Netatmo-Cache': snapshot.cacheStatus,
+    'X-Netatmo-Count': String(stations.length)
+  });
+}
+
+if (url.pathname === '/netatmo/wind') {
+  const stations = snapshot.stations.filter(
+    (station) => station.hasWind
+  );
+
+  return jsonResponse(stations, 200, {
+    'X-Netatmo-Cache': snapshot.cacheStatus,
+    'X-Netatmo-Count': String(stations.length)
+  });
+}
+
+// Alternativa semplice per cercare una stazione:
+// /netatmo/station?id=70:ee:50:bf:7e:5a
+if (url.pathname === '/netatmo/station') {
+  const stationId = url.searchParams.get('id');
+
+  if (!stationId) {
+    return jsonResponse(
+      { error: 'Manca il parametro id' },
+      400
+    );
+  }
+
+  const station = snapshot.stations.find(
+    (item) =>
+      item.id.toLowerCase() ===
+      stationId.toLowerCase()
+  );
+
+  if (!station) {
+    return jsonResponse(
+      {
+        error: 'Stazione non trovata',
+        requestedId: stationId
+      },
+      404
+    );
+  }
+
+  return jsonResponse(station);
+}
       if (url.pathname === '/netatmo/all') {
         let stations = [...snapshot.stations];
 
