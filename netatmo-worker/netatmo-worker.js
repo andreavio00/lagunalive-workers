@@ -32,6 +32,8 @@ const BBOX = {
 
 const STATION_LIMIT = 100;
 const CACHE_SECONDS = 300;
+const CACHE_RETENTION_SECONDS = 24 * 60 * 60;
+const RETRY_AFTER_ERROR_SECONDS = 5 * 60;
 const STALE_AFTER_MINUTES = 30;
 
 // Nomi già identificati con sufficiente sicurezza.
@@ -230,6 +232,7 @@ export default {
               networkRole: selection.networkRole,
               networkOrder: selection.networkOrder,
               optional: selection.optional,
+              sourceFallback: snapshot.cacheStatus === 'STALE',
               hasTemperature: station.temp !== null,
               hasHumidity: station.humidity !== null,
               hasPressure: station.pressure !== null
@@ -461,35 +464,106 @@ async function getSnapshot(request, ctx) {
 
   if (cached) {
     const snapshot = await cached.json();
+    const now = Date.now();
+    const fetchedAt = Date.parse(snapshot.fetchedAt || '');
+    const lastAttemptAt = Date.parse(
+      snapshot.lastRefreshAttemptAt || snapshot.fetchedAt || ''
+    );
+    const dataAge = Number.isFinite(fetchedAt)
+      ? now - fetchedAt
+      : Number.POSITIVE_INFINITY;
+    const attemptAge = Number.isFinite(lastAttemptAt)
+      ? now - lastAttemptAt
+      : Number.POSITIVE_INFINITY;
 
-    return {
-      ...snapshot,
-      cacheStatus: 'HIT'
-    };
+    if (dataAge <= CACHE_SECONDS * 1000) {
+      return {
+        ...snapshot,
+        cacheStatus: 'HIT'
+      };
+    }
+
+    if (
+      snapshot.lastRefreshError &&
+      attemptAge <= RETRY_AFTER_ERROR_SECONDS * 1000
+    ) {
+      return {
+        ...snapshot,
+        cacheStatus: 'STALE',
+        sourceWarning: snapshot.lastRefreshError
+      };
+    }
+
+    try {
+      const refreshed = await fetchNetatmoSnapshot();
+      const stored = {
+        ...refreshed,
+        lastRefreshAttemptAt: refreshed.fetchedAt,
+        lastRefreshError: null
+      };
+
+      ctx.waitUntil(putSnapshot(cache, cacheKey, stored));
+
+      return {
+        ...refreshed,
+        cacheStatus: 'REFRESH'
+      };
+    } catch (error) {
+      const lastRefreshAttemptAt = new Date().toISOString();
+      const stored = {
+        ...snapshot,
+        lastRefreshAttemptAt,
+        lastRefreshError: error.message
+      };
+
+      // Salva anche l'ora del tentativo fallito: per cinque minuti le
+      // richieste successive useranno lo snapshot senza martellare Netatmo.
+      ctx.waitUntil(putSnapshot(cache, cacheKey, stored));
+
+      return {
+        ...snapshot,
+        lastRefreshAttemptAt,
+        lastRefreshError: error.message,
+        cacheStatus: 'STALE',
+        sourceWarning: error.message
+      };
+    }
   }
 
   const snapshot = await fetchNetatmoSnapshot();
-
-  const cacheResponse = new Response(
-    JSON.stringify(snapshot),
-    {
-      headers: {
-        'Content-Type':
-          'application/json; charset=utf-8',
-        'Cache-Control':
-          `public, max-age=${CACHE_SECONDS}`
-      }
-    }
-  );
+  const stored = {
+    ...snapshot,
+    lastRefreshAttemptAt: snapshot.fetchedAt,
+    lastRefreshError: null
+  };
 
   ctx.waitUntil(
-    cache.put(cacheKey, cacheResponse)
+    putSnapshot(cache, cacheKey, stored)
   );
 
   return {
     ...snapshot,
     cacheStatus: 'MISS'
   };
+}
+
+function putSnapshot(cache, cacheKey, snapshot) {
+  const cacheResponse = new Response(
+    JSON.stringify(snapshot),
+    {
+      headers: {
+        'Content-Type':
+          'application/json; charset=utf-8',
+        // Il contenuto è considerato fresco solo per CACHE_SECONDS; la
+        // durata maggiore serve esclusivamente come ultimo dato valido
+        // quando Netatmo limita temporaneamente l'accesso.
+        'Cache-Control':
+          `public, max-age=${CACHE_RETENTION_SECONDS}`
+      }
+    }
+  );
+
+  return cache.put(cacheKey, cacheResponse);
 }
 
 async function fetchNetatmoSnapshot() {
@@ -911,4 +985,3 @@ function jsonResponse(
     }
   );
 }
-
